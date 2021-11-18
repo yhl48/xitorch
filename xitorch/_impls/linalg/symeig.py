@@ -7,6 +7,7 @@ from xitorch._utils.bcast import get_bcasted_dims
 from xitorch._utils.tensor import tallqr, to_fortran_order
 from xitorch.debug.modes import is_debug_enabled
 from xitorch._utils.exceptions import MathWarning
+import pdb
 
 def exacteig(A: LinearOperator, neig: int,
              mode: str, M: Optional[LinearOperator]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -226,6 +227,76 @@ def davidson(A: LinearOperator, neig: int,
     eigvecs = best_eigvecs  # (*BAM, na, neig)
     return eigvals, eigvecs
 
+
+def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
+           neig: int,
+           mode: str,
+           M: Optional[LinearOperator] = None,
+           max_niter: int = 1000,
+           nguess: Optional[int] = None,
+           v_init: str = "randn",
+           max_addition: Optional[int] = None,
+           min_eps: float = 1e-6,
+           verbose: bool = False,
+           **unused) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    B = None
+
+    if nguess is None:
+        nguess = neig
+
+    # get the shape of the transformation
+    na = A.shape[-1]
+    if M is None:
+        bcast_dims = A.shape[:-2]
+    else:
+        bcast_dims = get_bcasted_dims(A.shape[:-2], M.shape[:-2])
+    dtype = A.dtype
+    device = A.device
+
+    if B is None:
+        # create a linop of identity tensor with shape == A.shape if B is None
+        b = torch.eye(n=A.shape[-2], m=A.shape[-1], dtype=dtype, device=device)
+        if len(A.shape) > 2:
+            BA = A.shape[:-2]
+            b = b.repeat(BA, 1, 1)
+        B = LinearOperator.m(b)
+    
+    assert A.shape == B.shape
+
+    # set up the initial guess
+    V = _set_initial_v(v_init.lower(), dtype, device,
+                       bcast_dims, na, nguess,
+                       M=M)  # (*BAM, na, nguess)
+    C, theta = rayleigh_ritz(V, V, A, B)
+    V = torch.matmul(V, C)
+    R = A.mm(V) - torch.matmul(B.mm(V), theta)
+    P: Optional[torch.Tensor] = None
+    for i in range(max_niter):
+        S = torch.cat((V, R, P), dim=-1) if P is not None else torch.cat((V, R), dim=-1)
+        C, theta = rayleigh_ritz(S, V, A, B)
+        X = torch.matmul(S, C[..., :nguess])
+        R = A.mm(X) - torch.matmul(B.mm(X), theta)
+        P = torch.matmul(S[..., nguess:], C[..., nguess:, :nguess])
+
+    return torch.diag(theta), V
+
+def rayleigh_ritz(S: torch.Tensor, V: torch.Tensor,
+                  A: LinearOperator,
+                  B: LinearOperator) -> Tuple[torch.Tensor, torch.Tensor]:
+    StBS = torch.matmul(S.T, B.mm(S))  # this can be ill-conditioned
+    D = torch.inverse(torch.diag(torch.diag(StBS + 1e-6))) ** 0.5
+    inp = torch.matmul(D, torch.matmul(StBS, D))
+    Binp = inp.shape[:-2]
+    jitter = torch.eye(inp.shape[-2], inp.shape[-1], dtype=inp.dtype, device=inp.device).repeat(*Binp, 1, 1)
+    R = torch.cholesky(inp + jitter, upper=True)  # might need to jitter
+    R_inv = torch.linalg.inv(R)
+    StAS = torch.matmul(S.T, A.mm(S))
+    theta, Z = torch.symeig(R_inv.T * D * StAS * D * R_inv, eigenvectors=True)
+    C = torch.matmul(D, torch.matmul(R_inv, Z))
+    return C, torch.diag(theta[:V.shape[-1]])
+
+
 def _set_initial_v(vinit_type: str,
                    dtype: torch.dtype, device: torch.device,
                    batch_dims: Sequence,
@@ -262,3 +333,14 @@ def _take_eigpairs(eival, eivec, neig, mode):
         eival = eival[..., -neig:]
         eivec = eivec[..., -neig:]
     return eival, eivec
+
+############# helper functions #############
+def _safedenom(r: torch.Tensor, eps: float) -> torch.Tensor:
+    r[r == 0] = eps
+    return r
+
+def _dot(r: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    # r: (*BR, nr, nc)
+    # z: (*BR, nr, nc)
+    # return: (*BR, 1, nc)
+    return torch.einsum("...rc,...rc->...c", r.conj(), z).unsqueeze(-2)
