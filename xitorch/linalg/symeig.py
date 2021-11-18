@@ -9,7 +9,7 @@ from xitorch._utils.assertfuncs import assert_runtime
 from xitorch._utils.misc import set_default_option, \
     dummy_context_manager, get_method, get_and_pop_keys
 from xitorch._docstr.api_docstr import get_methods_docstr
-from xitorch._impls.linalg.symeig import exacteig, davidson
+from xitorch._impls.linalg.symeig import exacteig, davidson, lobpcg
 from xitorch._utils.exceptions import MathWarning
 
 __all__ = ["lsymeig", "usymeig", "symeig", "svd"]
@@ -275,6 +275,7 @@ class symeig_torchfcn(torch.autograd.Function):
             methods = {
                 "davidson": davidson,
                 "custom_exacteig": custom_exacteig,
+                "lobpcg": lobpcg,
             }
             method_fcn = get_method("symeig", methods, method)
             evals, evecs = method_fcn(A, neig, mode, M, **config)
@@ -455,6 +456,7 @@ def custom_exacteig(A, neig, mode, M=None, **options):
 _symeig_methods = {
     "exacteig": exacteig,
     "davidson": davidson,
+    "lobpcg": lobpcg,
 }
 ignore_kwargs = ["M", "mparams"]
 symeig.__doc__ = get_methods_docstr(symeig, _symeig_methods, ignore_kwargs)
