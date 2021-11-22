@@ -2,11 +2,13 @@ import warnings
 import functools
 import torch
 from xitorch import LinearOperator
-from typing import Union, Optional, Tuple, Sequence
+from typing import Union, Optional, Tuple, Sequence, Callable
 from xitorch._utils.bcast import get_bcasted_dims
 from xitorch._utils.tensor import tallqr, to_fortran_order
 from xitorch.debug.modes import is_debug_enabled
 from xitorch._utils.exceptions import MathWarning
+from scipy.sparse import bmat, coo_matrix
+import scipy
 import pdb
 
 def exacteig(A: LinearOperator, neig: int,
@@ -227,6 +229,143 @@ def davidson(A: LinearOperator, neig: int,
     eigvecs = best_eigvecs  # (*BAM, na, neig)
     return eigvals, eigvecs
 
+# torch.set_default_dtype(torch.float64)
+# def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
+#            neig: int,
+#            mode: str,
+#            M: Optional[LinearOperator] = None,
+#            max_niter: int = 1000,
+#            nguess: Optional[int] = None,
+#            v_init: str = "randn",
+#            max_addition: Optional[int] = None,
+#            min_eps: float = 1e-6,
+#            verbose: bool = False,
+#            **unused) -> Tuple[torch.Tensor, torch.Tensor]:
+
+#     K = A.mm(torch.eye(A.shape[-1]))
+#     # L, U = torch.lu(K)
+#     # print(L)
+#     # pdb.set_trace()
+#     K = torch.diag(torch.diag(K))
+#     K_inv = torch.inverse(K)
+
+#     B = None
+
+#     if nguess is None:
+#         nguess = neig
+
+#     # get the shape of the transformation
+#     na = A.shape[-1]
+#     if M is None:
+#         bcast_dims = A.shape[:-2]
+#     else:
+#         bcast_dims = get_bcasted_dims(A.shape[:-2], M.shape[:-2])
+#     dtype = A.dtype
+#     device = A.device
+
+#     if B is None:
+#         # create a linop of identity tensor with shape == A.shape if B is None
+#         b = torch.eye(n=A.shape[-2], m=A.shape[-1], dtype=dtype, device=device)
+#         if len(A.shape) > 2:
+#             BA = A.shape[:-2]
+#             b = b.repeat(BA, 1, 1)
+#         B = LinearOperator.m(b)
+    
+#     assert A.shape == B.shape
+
+#     # set up the initial guess
+#     V = _set_initial_v(v_init.lower(), dtype, device,
+#                        bcast_dims, na, nguess,
+#                        M=M)  # (*BAM, na, nguess)
+#     V = V / _safedenom(torch.max(V, dim=-2, keepdim=True)[0], 1e-12)
+
+#     C, theta = rayleigh_ritz(V, A, B)
+#     theta = torch.diag(theta)
+
+#     V = torch.matmul(V, C)
+#     V = V / _safedenom(torch.max(V, dim=-2, keepdim=True)[0], 1e-12)
+
+#     R = A.mm(V) - torch.matmul(B.mm(V), theta)
+#     R = R - torch.matmul(V, torch.matmul(V.T, R))
+#     R = R / _safedenom(torch.max(R, dim=-2, keepdim=True)[0], 1e-12)
+
+#     P: Optional[torch.Tensor] = None
+#     for i in range(max_niter):
+#         # print(torch.linalg.cond(R))
+#         # R = torch.matmul(K_inv, R)
+#         # print(torch.linalg.cond(R))
+#         S = torch.cat((V, R, P), dim=-1) if P is not None else torch.cat((V, R), dim=-1)
+#         # S = torch.matmul(K_inv, S)
+#         # print(torch.linalg.norm(S, dim=-1, keepdim=True).shape)
+#         # S = S / _safedenom(torch.linalg.norm(S, dim=-2, keepdim=True), 1e-12)
+#         # S = S / _safedenom(torch.max(S, dim=-2, keepdim=True)[0], 1e-12)
+#         # print(S)
+#         # print(torch.linalg.eigh(torch.matmul(S.T, S))[0])
+#         # print(torch.matmul(S.T, S))
+#         # pdb.set_trace()
+#         C, theta = rayleigh_ritz(S, A, B)
+#         # print(C)
+#         theta = torch.diag(theta[:nguess])
+
+#         V = torch.matmul(S, C[..., :nguess])  # correct
+#         V = V / _safedenom(torch.max(V, dim=-2, keepdim=True)[0], 1e-12)
+
+#         R = A.mm(V) - torch.matmul(B.mm(V), theta)
+#         R = R - torch.matmul(V, torch.matmul(V.T, R))
+#         R = R / _safedenom(torch.max(R, dim=-2, keepdim=True)[0], 1e-12)
+
+#         P = torch.matmul(S[..., nguess:], C[..., nguess:, :nguess])  # correct
+#         P = P - torch.matmul(V, torch.matmul(V.T, P))
+#         P = P - torch.matmul(R, torch.matmul(R.T, P))
+#         # P = P / _safedenom(torch.max(P, dim=-2, keepdim=True)[0], 1e-12)
+#         # print(C)
+#         # print(P)
+#         # print(P)
+#         # pdb.set_trace()
+#         # print(theta)
+#     return torch.diag(theta), V
+
+# def rayleigh_ritz(S: torch.Tensor,
+#                   A: LinearOperator,
+#                   B: LinearOperator) -> Tuple[torch.Tensor, torch.Tensor]:
+#     StBS = torch.matmul(S.T, B.mm(S))  # this can be ill-conditioned
+#     # StBS = torch.matmul(torch.pinverse(StBS), StBS)
+#     # assert torch.all(torch.diag(StBS) > 0)
+#     # assert torch.allclose(torch.matmul(S.T, B.mm(S)), torch.matmul(S.T, S))  # delete later
+#     D = torch.inverse(torch.diag(torch.diag(StBS))) ** 0.5  # source of error
+#     # D = torch.eye(D.shape[-1])
+#     # D = torch.diag(torch.diag(StBS)) ** -0.5
+#     inp = torch.matmul(D, torch.matmul(StBS, D))
+#     Binp = inp.shape[:-2]
+#     jitter = torch.eye(inp.shape[-2], inp.shape[-1], dtype=inp.dtype, device=inp.device).repeat(*Binp, 1, 1) * 1e-6
+#     R = torch.linalg.cholesky(inp + 1 * jitter)  # lower triangular R
+#     # print(R)
+#     R_inv = torch.linalg.inv(R)
+#     # print(R_inv)
+#     StAS = torch.matmul(S.T, A.mm(S))
+#     # StAS = torch.matmul(torch.pinverse(StAS), StAS)
+    
+#     theta, Z = torch.linalg.eigh(R_inv * D * StAS * D * R_inv.T)
+#     # print(theta)
+#     # print(Z)
+#     theta, Z = _take_eigpairs(theta, Z, len(theta), 'uppest')
+#     # print(theta)
+#     # print(Z)
+#     # print(theta)
+#     # C = torch.matmul(R_inv.T, Z)
+#     C = torch.matmul(D, torch.matmul(R_inv.T, Z))  # why is C always zero?
+#     # C = (C + C.T) / 2
+#     # C = torch.diag(torch.diag(C))
+#     print(torch.linalg.cond(R))
+#     print(torch.linalg.cond(S))
+#     print(torch.linalg.cond(D))
+#     print(torch.linalg.cond(StBS))
+#     print(torch.linalg.cond(StAS))
+#     # print(C)
+#     # print(torch.matmul(C.T, torch.matmul(StBS, C)))
+#     # print(torch.matmul(C.T, torch.matmul(StAS, C)))
+#     pdb.set_trace()
+#     return C.T, theta
 
 def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
            neig: int,
@@ -239,7 +378,8 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
            min_eps: float = 1e-6,
            verbose: bool = False,
            **unused) -> Tuple[torch.Tensor, torch.Tensor]:
-
+    
+    
     B = None
 
     if nguess is None:
@@ -254,47 +394,323 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
     dtype = A.dtype
     device = A.device
 
-    if B is None:
-        # create a linop of identity tensor with shape == A.shape if B is None
-        b = torch.eye(n=A.shape[-2], m=A.shape[-1], dtype=dtype, device=device)
-        if len(A.shape) > 2:
-            BA = A.shape[:-2]
-            b = b.repeat(BA, 1, 1)
-        B = LinearOperator.m(b)
-    
-    assert A.shape == B.shape
-
     # set up the initial guess
-    V = _set_initial_v(v_init.lower(), dtype, device,
+    X = _set_initial_v(v_init.lower(), dtype, device,
                        bcast_dims, na, nguess,
                        M=M)  # (*BAM, na, nguess)
-    C, theta = rayleigh_ritz(V, V, A, B)
-    V = torch.matmul(V, C)
-    R = A.mm(V) - torch.matmul(B.mm(V), theta)
-    P: Optional[torch.Tensor] = None
-    for i in range(max_niter):
-        S = torch.cat((V, R, P), dim=-1) if P is not None else torch.cat((V, R), dim=-1)
-        C, theta = rayleigh_ritz(S, V, A, B)
-        X = torch.matmul(S, C[..., :nguess])
-        R = A.mm(X) - torch.matmul(B.mm(X), theta)
-        P = torch.matmul(S[..., nguess:], C[..., nguess:, :nguess])
 
-    return torch.diag(theta), V
+    blockVectorX = X
+    blockVectorY = None
 
-def rayleigh_ritz(S: torch.Tensor, V: torch.Tensor,
-                  A: LinearOperator,
-                  B: LinearOperator) -> Tuple[torch.Tensor, torch.Tensor]:
-    StBS = torch.matmul(S.T, B.mm(S))  # this can be ill-conditioned
-    D = torch.inverse(torch.diag(torch.diag(StBS + 1e-6))) ** 0.5
-    inp = torch.matmul(D, torch.matmul(StBS, D))
-    Binp = inp.shape[:-2]
-    jitter = torch.eye(inp.shape[-2], inp.shape[-1], dtype=inp.dtype, device=inp.device).repeat(*Binp, 1, 1)
-    R = torch.cholesky(inp + jitter, upper=True)  # might need to jitter
-    R_inv = torch.linalg.inv(R)
-    StAS = torch.matmul(S.T, A.mm(S))
-    theta, Z = torch.symeig(R_inv.T * D * StAS * D * R_inv, eigenvectors=True)
-    C = torch.matmul(D, torch.matmul(R_inv, Z))
-    return C, torch.diag(theta[:V.shape[-1]])
+    if max_niter is None:
+        max_niter = 20
+
+    if blockVectorY is not None:
+        sizeY = blockVectorY.shape[1]
+    else:
+        sizeY = 0
+
+    n, sizeX = blockVectorX.shape
+
+    # B-orthonormalize X
+    blockVectorX, blockVectorBX = _b_orthonormalize(B, blockVectorX)
+
+    # Compute the initial Ritz vectors: solve the eigenproblem.
+    blockVectorAX = A.mm(blockVectorX)
+    gramXAX = torch.matmul(blockVectorX.T.conj(), blockVectorAX)
+
+    _lambda, eigBlockVector = torch.linalg.eigh(gramXAX)
+    ii = _get_indx(_lambda, sizeX, largest=True)
+    _lambda = _lambda[ii]
+
+    eigBlockVector = torch.Tensor(eigBlockVector[:, ii])
+    blockVectorX = torch.matmul(blockVectorX, eigBlockVector)
+    blockVectorAX = torch.matmul(blockVectorAX, eigBlockVector)
+
+    # Active index set
+    activeMask = torch.ones((sizeX), dtype=bool)
+    previousBlockSize = sizeX
+    ident = torch.eye(sizeX, dtype=A.dtype)
+    ident0 = torch.eye(sizeX, dtype=A.dtype)
+
+    # Main iteration loop.
+    blockVectorP = None  # set during iteration
+    blockVectorAP = None
+    blockVectorBP = None
+
+    iterationNumber = -1
+    restart = True
+    explicitGramFlag = False
+   
+    residualTolerance = torch.sqrt(torch.Tensor([1e-15])) * n
+    while iterationNumber < max_niter:
+        iterationNumber += 1
+
+        assert B is None
+        aux = blockVectorX * _lambda[None, :]
+
+        blockVectorR = blockVectorAX - aux
+
+        aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
+        residualNorms = torch.sqrt(aux)
+
+        ii = torch.where(residualNorms > residualTolerance, True, False)
+        activeMask = activeMask & ii
+
+        currentBlockSize = activeMask.sum()
+        if currentBlockSize != previousBlockSize:
+            previousBlockSize = currentBlockSize
+            ident = torch.eye(currentBlockSize, dtype=A.dtype)
+        
+        if currentBlockSize == 0:
+            break
+        
+        # activeBlockVectorR = blockVectorR[:, activeMask]
+        
+        activeBlockVectorR = _as2d(blockVectorR[:, activeMask])
+
+        if iterationNumber > 0:
+            activeBlockVectorP = _as2d(blockVectorP[:, activeMask])
+            activeBlockVectorAP = _as2d(blockVectorAP[:, activeMask])
+            # activeBlockVectorP = blockVectorP[:, activeMask]
+            # activeBlockVectorAP = blockVectorAP[:, activeMask]
+        #     if B is not None:
+        #         activeBlockVectorBP = _as2d(blockVectorBP[:, activeMask])
+
+        assert B is None
+        activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
+                                torch.matmul(blockVectorX.T.conj(),
+                                activeBlockVectorR))
+
+        # B-orthonormalize the preconditioned residuals
+        aux = _b_orthonormalize(B, activeBlockVectorR)
+        activeBlockVectorR, activeBlockVectorBR = aux
+
+        activeBlockVectorAR = A.mm(activeBlockVectorR)
+
+        if iterationNumber > 0:
+            assert B is None
+            aux = _b_orthonormalize(B, activeBlockVectorP, retInvR=True)
+            activeBlockVectorP, _, invR, normal = aux
+            # Function _b_orthonormalize returns None if Cholesky fails
+            if activeBlockVectorP is not None:
+                activeBlockVectorAP = activeBlockVectorAP / _safedenom(normal, 1e-12)
+                activeBlockVectorAP = torch.matmul(activeBlockVectorAP, invR)
+                restart = False
+            else:
+                restart = True
+        
+        # Perform the Rayleigh Ritz Procedure:
+        # Compute symmetric Gram matrices:
+        if activeBlockVectorAR.dtype == torch.float64:
+            myeps = 1
+        elif activeBlockVectorR.dtype == torch.float32:
+            myeps = 1e-4
+        else:
+            myeps = 1e-8
+
+        if residualNorms.max() > myeps and not explicitGramFlag:
+            explicitGramFlag = False
+        else:
+            # Once explicitGramFlag, forever explicitGramFlag.
+            explicitGramFlag = True
+
+        # Shared memory assingments to simplify the code
+        if B is None:
+            blockVectorBX = blockVectorX
+            activeBlockVectorBR = activeBlockVectorR
+            if not restart:
+                activeBlockVectorBP = activeBlockVectorP
+
+        # Common submatrices:
+        gramXAR = torch.matmul(blockVectorX.T.conj(), activeBlockVectorAR)
+        gramRAR = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorAR)
+
+        if explicitGramFlag:
+            gramRAR = (gramRAR + gramRAR.T.conj()) / 2
+            gramXAX = torch.matmul(blockVectorX.T.conj(), blockVectorAX)
+            gramXAX = (gramXAX + gramXAX.T.conj())/2
+            gramXBX = torch.matmul(blockVectorX.T.conj(), blockVectorBX)
+            gramRBR = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorBR)
+            gramXBR = torch.matmul(blockVectorX.T.conj(), activeBlockVectorBR)
+        else:
+            gramXAX = torch.diag(_lambda)
+            gramXBX = ident0
+            gramRBR = ident
+            gramXBR = torch.zeros((sizeX, currentBlockSize), dtype=A.dtype)
+
+        if not restart:
+            gramXAP = torch.matmul(blockVectorX.T.conj(), activeBlockVectorAP)
+            gramRAP = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorAP)
+            gramPAP = torch.matmul(activeBlockVectorP.T.conj(), activeBlockVectorAP)
+            gramXBP = torch.matmul(blockVectorX.T.conj(), activeBlockVectorBP)
+            gramRBP = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorBP)
+            if explicitGramFlag:
+                gramPAP = (gramPAP + gramPAP.T.conj())/2
+                gramPBP = torch.matmul(activeBlockVectorP.T.conj(),
+                                 activeBlockVectorBP)
+            else:
+                gramPBP = ident
+
+            gramXAX = coo_matrix(gramXAX.numpy())
+            gramXAR = coo_matrix(gramXAR.numpy())
+            gramXAP = coo_matrix(gramXAP.numpy())
+            gramXBX = coo_matrix(gramXBX.numpy())
+            gramRAP = coo_matrix(gramRAP.numpy())
+            gramRAR = coo_matrix(gramRAR.numpy())
+            gramPAP = coo_matrix(gramPAP.numpy())
+            gramXBR = coo_matrix(gramXBR.numpy())
+            gramRBR = coo_matrix(gramRBR.numpy())
+            gramXBP = coo_matrix(gramXBP.numpy())
+            gramRBP = coo_matrix(gramRBP.numpy())
+            gramPBP = coo_matrix(gramPBP.numpy())
+
+            # gramA = torch.Tensor([[gramXAX, gramXAR, gramXAP],
+            #                       [gramXAR.T.conj(), gramRAR, gramRAP],
+            #                       [gramXAP.T.conj(), gramRAP.T.conj(), gramPAP]])
+            # gramB = torch.Tensor([[gramXBX, gramXBR, gramXBP],
+            #                       [gramXBR.T.conj(), gramRBR, gramRBP],
+            #                       [gramXBP.T.conj(), gramRBP.T.conj(), gramPBP]])
+
+            gramA = bmat([[gramXAX, gramXAR, gramXAP],
+                          [gramXAR.T.conj(), gramRAR, gramRAP],
+                          [gramXAP.T.conj(), gramRAP.T.conj(), gramPAP]]).toarray()
+            gramB = bmat([[gramXBX, gramXBR, gramXBP],
+                          [gramXBR.T.conj(), gramRBR, gramRBP],
+                          [gramXBP.T.conj(), gramRBP.T.conj(), gramPBP]]).toarray()
+            # gramA = torch.Tensor(gramA)
+            # gramB = torch.Tensor(gramB)
+            try:
+                # _lambda, eigBlockVector = torch.linalg.eigh(gramA)
+                _lambda, eigBlockVector = scipy.linalg.eigh(gramB)
+                _lambda, eigBlockVector = torch.Tensor(_lambda), torch.Tensor(eigBlockVector)
+            except:
+                # try again after dropping the direction vectors P from RR
+                restart = True
+
+        if restart:
+            gramXAX = coo_matrix(gramXAX.numpy())
+            gramXAR = coo_matrix(gramXAR.numpy())
+            gramRAR = coo_matrix(gramRAR.numpy())
+            gramXBX = coo_matrix(gramXBX.numpy())
+            gramXBR = coo_matrix(gramXBR.numpy())
+            gramRBR = coo_matrix(gramRBR.numpy())
+
+
+            gramA = bmat([[gramXAX, gramXAR],
+                          [gramXAR.T.conj(), gramRAR]]).toarray()
+            gramB = bmat([[gramXBX, gramXBR],
+                          [gramXBR.T.conj(), gramRBR]]).toarray()
+            # gramA = torch.Tensor(gramA)
+            # gramB = torch.Tensor(gramB)
+            # gramA = torch.Tensor([[gramXAX, gramXAR],
+            #                       [gramXAR.T.conj(), gramRAR]])
+            # gramB = torch.Tensor([[gramXBX, gramXBR],
+            #                       [gramXBR.T.conj(), gramRBR]])
+
+            # _lambda, eigBlockVector = torch.linalg.eigh(gramA)
+            try:
+                _lambda, eigBlockVector = scipy.linalg.eigh(gramA, gramB)
+                _lambda, eigBlockVector = torch.Tensor(_lambda), torch.Tensor(eigBlockVector)
+            except:
+                raise ValueError('eigh has failed in lobpcg iterations')
+        ii = _get_indx(_lambda, sizeX, largest=True)
+        _lambda = _lambda[ii]
+        eigBlockVector = eigBlockVector[:, ii]
+
+        # Compute Ritz vectors
+        assert B is None
+        if not restart:
+            eigBlockVectorX = eigBlockVector[:sizeX]
+            eigBlockVectorR = eigBlockVector[sizeX:sizeX+currentBlockSize]
+            eigBlockVectorP = eigBlockVector[sizeX+currentBlockSize:]
+
+            pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+            pp += torch.matmul(activeBlockVectorP, eigBlockVectorP)
+
+            app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+            app += torch.matmul(activeBlockVectorAP, eigBlockVectorP)
+        else:
+            eigBlockVectorX = eigBlockVector[:sizeX]
+            eigBlockVectorR = eigBlockVector[sizeX:]
+
+            pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+            app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+
+        blockVectorX = torch.matmul(blockVectorX, eigBlockVectorX) + pp
+        blockVectorAX = torch.matmul(blockVectorAX, eigBlockVectorX) + app
+
+        blockVectorP, blockVectorAP = pp, app
+
+    assert B is None
+    aux = blockVectorX * _lambda[None, :]
+    blockVectorR = blockVectorAX - aux
+
+    aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
+    residualNorms = torch.sqrt(aux)
+    return _lambda, blockVectorX
+
+def _as2d(ar: torch.Tensor):
+    """
+    If the input array is 2D return it, if it is 1D, append a dimension,
+    making it a column vector.
+    """
+    if ar.ndim == 2:
+        return ar
+    else:  # Assume 1!
+        # aux = torch.Tensor(ar, copy=False)
+        # aux.shape = (ar.shape[0], 1)
+        # return aux
+        return ar[:, None]
+
+def _get_indx(_lambda, num, largest):
+    """Get `num` indices into `_lambda` depending on `largest` option."""
+    ii = torch.argsort(_lambda)
+    print(ii)
+    pdb.set_trace()
+    if largest:
+        ii = ii[:-num-1:-1]
+        # ii = ii[..., -num:]
+    else:
+        ii = ii[..., :num]
+
+    return ii
+
+def _b_orthonormalize(B: Optional[LinearOperator],
+                      blockVectorV: torch.Tensor,
+                      blockVectorBV: Optional[torch.Tensor] = None,
+                      retInvR: bool = False):
+    """B-orthonormalize the given block vector using Cholesky."""
+    normalization = torch.max(blockVectorV, axis=-2, keepdim=True)[0]
+    blockVectorV = blockVectorV / _safedenom(normalization, 1e-12)
+    if blockVectorBV is None:
+        if B is None:
+            blockVectorBV = blockVectorV  # Shared data!!!
+    else:
+        blockVectorBV = blockVectorBV / _safedenom(normalization, 1e-12)
+    VBV = torch.matmul(blockVectorV.T.conj(), blockVectorBV)
+    try:
+        # VBV is a Cholesky factor from now on...
+        VBV = torch.cholesky(VBV, upper=True)
+        VBV = torch.linalg.inv(VBV)
+        blockVectorV = torch.matmul(blockVectorV, VBV)
+        # blockVectorV = (cho_solve((VBV.T, True), blockVectorV.T)).T
+        if B is not None:
+            blockVectorBV = torch.matmul(blockVectorBV, VBV)
+            # blockVectorBV = (cho_solve((VBV.T, True), blockVectorBV.T)).T
+        else:
+            blockVectorBV = None
+    except:
+        #raise ValueError('Cholesky has failed')
+        blockVectorV = None
+        blockVectorBV = None
+        VBV = None
+
+    if retInvR:
+        return blockVectorV, blockVectorBV, VBV, normalization
+    else:
+        return blockVectorV, blockVectorBV
+
 
 
 def _set_initial_v(vinit_type: str,
@@ -344,3 +760,12 @@ def _dot(r: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
     # z: (*BR, nr, nc)
     # return: (*BR, 1, nc)
     return torch.einsum("...rc,...rc->...c", r.conj(), z).unsqueeze(-2)
+
+def _setup_precond(precond: Optional[LinearOperator]) -> Callable[[torch.Tensor], torch.Tensor]:
+    if isinstance(precond, LinearOperator):
+        precond_fcn = lambda x: precond.mm(x)
+    elif precond is None:
+        precond_fcn = lambda x: x
+    else:
+        raise TypeError("precond can only be LinearOperator or None")
+    return precond_fcn
