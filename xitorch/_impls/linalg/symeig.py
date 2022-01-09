@@ -307,10 +307,9 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
     restart = True
     explicitGramFlag = False
 
-    # residualTolerance = np.sqrt(1e-15) * n
-    # residualTolerance = math.sqrt(1e-15) * n
-    # residualTolerance = torch.sqrt(torch.Tensor([1e-15])) * n
+    # for iterationNumber in range(max_niter):
     while iterationNumber < max_niter:
+        # print(iterationNumber)
         iterationNumber += 1
 
         assert B is None
@@ -321,7 +320,6 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
         residualNorms = torch.sqrt(aux)
 
-        # ii = np.where(residualNorms > residualTolerance, True, False)
         ii = torch.where(residualNorms > residualTolerance, True, False)
         activeMask = activeMask & ii
 
@@ -333,16 +331,12 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         if currentBlockSize == 0:
             break
 
-        # activeBlockVectorR = blockVectorR[:, activeMask]
         activeBlockVectorR = _as2d(blockVectorR[:, activeMask])
 
         if iterationNumber > 0:
             activeBlockVectorP = _as2d(blockVectorP[:, activeMask])
             activeBlockVectorAP = _as2d(blockVectorAP[:, activeMask])
-            # activeBlockVectorP = blockVectorP[:, activeMask]
-            # activeBlockVectorAP = blockVectorAP[:, activeMask]
-        #     if B is not None:
-        #         activeBlockVectorBP = _as2d(blockVectorBP[:, activeMask])
+            assert B is None
 
         assert B is None
         activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
@@ -382,6 +376,7 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
             explicitGramFlag = True
 
         # Shared memory assingments to simplify the code
+        assert B is None
         if B is None:
             blockVectorBX = blockVectorX
             activeBlockVectorBR = activeBlockVectorR
@@ -417,28 +412,6 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
             else:
                 gramPBP = ident
 
-            # gramXAX = coo_matrix(gramXAX.numpy())
-            # gramXAR = coo_matrix(gramXAR.numpy())
-            # gramXAP = coo_matrix(gramXAP.numpy())
-            # gramXBX = coo_matrix(gramXBX.numpy())
-            # gramRAP = coo_matrix(gramRAP.numpy())
-            # gramRAR = coo_matrix(gramRAR.numpy())
-            # gramPAP = coo_matrix(gramPAP.numpy())
-            # gramXBR = coo_matrix(gramXBR.numpy())
-            # gramRBR = coo_matrix(gramRBR.numpy())
-            # gramXBP = coo_matrix(gramXBP.numpy())
-            # gramRBP = coo_matrix(gramRBP.numpy())
-            # gramPBP = coo_matrix(gramPBP.numpy())
-
-            # gramA = bmat([[gramXAX, gramXAR, gramXAP],
-            #               [gramXAR.T.conj(), gramRAR, gramRAP],
-            #               [gramXAP.T.conj(), gramRAP.T.conj(), gramPAP]]).toarray()
-            # gramB = bmat([[gramXBX, gramXBR, gramXBP],
-            #               [gramXBR.T.conj(), gramRBR, gramRBP],
-            #               [gramXBP.T.conj(), gramRBP.T.conj(), gramPBP]]).toarray()
-            # gramA = torch.Tensor(gramA)
-            # gramB = torch.Tensor(gramB)
-
             gramA = torch.cat((torch.cat((gramXAX, gramXAR, gramXAP), dim=-1),
                                torch.cat((gramXAR.T.conj(), gramRAR, gramRAP), dim=-1),
                                torch.cat((gramXAP.T.conj(), gramRAP.T.conj(), gramPAP), dim=-1)), dim=-2)
@@ -447,52 +420,19 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
                                torch.cat((gramXBR.T.conj(), gramRBR, gramRBP), dim=-1),
                                torch.cat((gramXBP.T.conj(), gramRBP.T.conj(), gramPBP), dim=-1)), dim=-2)
 
-            # gramA = torch.Tensor([[gramXAX, gramXAR, gramXAP],
-            #                       [gramXAR.T.conj(), gramRAR, gramRAP],
-            #                       [gramXAP.T.conj(), gramRAP.T.conj(), gramPAP]])
-            # gramB = torch.Tensor([[gramXBX, gramXBR, gramXBP],
-            #                       [gramXBR.T.conj(), gramRBR, gramRBP],
-            #                       [gramXBP.T.conj(), gramRBP.T.conj(), gramPBP]])
             try:
-                # _lambda, eigBlockVector = scipy.linalg.eigh(gramA, gramB, check_finite=False)
-                # _lambda, eigBlockVector = torch.Tensor(_lambda), torch.Tensor(eigBlockVector)
                 _lambda, eigBlockVector = _eigh(gramA, gramB)
             except:
                 # try again after dropping the direction vectors P from RR
                 restart = True
 
         if restart:
-            # try:
-            #     gramXAX = coo_matrix(gramXAX.numpy())
-            #     gramXAR = coo_matrix(gramXAR.numpy())
-            #     gramRAR = coo_matrix(gramRAR.numpy())
-            #     gramXBX = coo_matrix(gramXBX.numpy())
-            #     gramXBR = coo_matrix(gramXBR.numpy())
-            #     gramRBR = coo_matrix(gramRBR.numpy())
-            # except:
-            #     pass
-
-            # gramA = bmat([[gramXAX, gramXAR],
-            #               [gramXAR.T.conj(), gramRAR]]).toarray()
-            # gramB = bmat([[gramXBX, gramXBR],
-            #               [gramXBR.T.conj(), gramRBR]]).toarray()
-            # gramA = torch.Tensor(gramA)
-            # gramB = torch.Tensor(gramB)
-
             gramA = torch.cat((torch.cat((gramXAX, gramXAR), dim=-1),
                                torch.cat((gramXAR.T.conj(), gramRAR), dim=-1)), dim=-2)
 
             gramB = torch.cat((torch.cat((gramXBX, gramXBR), dim=-1),
                                torch.cat((gramXBR.T.conj(), gramRBR), dim=-1)), dim=-2)
-            # gramA = torch.Tensor([[gramXAX, gramXAR],
-            #                       [gramXAR.T.conj(), gramRAR]])
-            # gramB = torch.Tensor([[gramXBX, gramXBR],
-            #                       [gramXBR.T.conj(), gramRBR]])
-
-            # _lambda, eigBlockVector = torch.linalg.eigh(gramA)
             try:
-                # _lambda, eigBlockVector = scipy.linalg.eigh(gramA, gramB, check_finite=False)
-                # _lambda, eigBlockVector = torch.Tensor(_lambda), torch.Tensor(eigBlockVector)
                 _lambda, eigBlockVector = _eigh(gramA, gramB)
             except:
                 raise ValueError('eigh has failed in lobpcg iterations')
@@ -524,14 +464,7 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         blockVectorAX = torch.matmul(blockVectorAX, eigBlockVectorX) + app
 
         blockVectorP, blockVectorAP = pp, app
-        print(_lambda)
 
-    assert B is None
-    aux = blockVectorX * _lambda[None, :]
-    blockVectorR = blockVectorAX - aux
-
-    aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
-    residualNorms = torch.sqrt(aux)
     return _lambda, blockVectorX
 
 def _as2d(ar: torch.Tensor):
@@ -578,7 +511,7 @@ def _b_orthonormalize(B: Optional[LinearOperator],
             # blockVectorBV = (cho_solve((VBV.T, True), blockVectorBV.T)).T
         else:
             blockVectorBV = None
-    except:
+    except TypeError:
         # raise ValueError('Cholesky has failed')
         blockVectorV = None
         blockVectorBV = None
@@ -636,16 +569,17 @@ def _eigh(A: torch.Tensor, B: Optional[torch.Tensor] = None):
     A(X) = lambda(B(X)) to standard eigen value problem using cholesky
     transformation
     """
-    if(B is None):  # use cupy's eigh in standard case
+    if B is None:  # use cupy's eigh in standard case
         vals, vecs = torch.linalg.eigh(A)
         return vals, vecs
-    R = _cholesky(B)
-    RTi = torch.linalg.inv(R)
-    Ri = torch.linalg.inv(R.T)
-    F = torch.matmul(RTi, torch.matmul(A, Ri))
-    vals, vecs = torch.linalg.eigh(F)
-    eigVec = torch.matmul(Ri, vecs)
-    return vals, eigVec
+    else:
+        R = _cholesky(B)
+        RTi = torch.linalg.inv(R)
+        Ri = torch.linalg.inv(R.T)
+        F = torch.matmul(RTi, torch.matmul(A, Ri))
+        vals, vecs = torch.linalg.eigh(F)
+        eigVec = torch.matmul(Ri, vecs)
+        return vals, eigVec
 
 def _cholesky(B):
     """
@@ -653,6 +587,228 @@ def _cholesky(B):
     NaNs in the output
     """
     R = torch.linalg.cholesky(B)
-    if torch.any(torch.isnan(R)):
-        raise RuntimeError()
+    # if torch.any(torch.isnan(R)):
+    #     raise RuntimeError()
     return R
+
+# def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
+#            neig: int,
+#            mode: str,
+#            M: Optional[LinearOperator] = None,
+#            max_niter: int = 1000,
+#            nguess: Optional[int] = None,
+#            v_init: str = "randn",
+#            max_addition: Optional[int] = None,
+#            min_eps: float = 1e-6,
+#            verbose: bool = False,
+#            **unused) -> Tuple[torch.Tensor, torch.Tensor]:
+
+#     B = None
+
+#     if nguess is None:
+#         nguess = neig
+
+#     # get the shape of the transformation
+#     na = A.shape[-1]
+#     if M is None:
+#         bcast_dims = A.shape[:-2]
+#     else:
+#         bcast_dims = get_bcasted_dims(A.shape[:-2], M.shape[:-2])
+#     dtype = A.dtype
+#     device = A.device
+
+#     # set up the initial guess
+#     X = _set_initial_v(v_init.lower(), dtype, device,
+#                        bcast_dims, na, nguess,
+#                        M=M)  # (*BAM, na, nguess)
+
+#     blockVectorX = X
+#     blockVectorY = None
+
+#     if max_niter is None:
+#         max_niter = 20
+
+#     if blockVectorY is not None:
+#         sizeY = blockVectorY.shape[1]
+#     else:
+#         sizeY = 0
+
+#     n, sizeX = blockVectorX.shape
+
+#     residualTolerance = torch.sqrt(torch.Tensor([1e-15])) * n
+
+#     # B-orthonormalize X
+#     blockVectorX, blockVectorBX = _b_orthonormalize(B, blockVectorX)
+
+#     # Compute the initial Ritz vectors: solve the eigenproblem.
+#     blockVectorAX = A.mm(blockVectorX)
+#     gramXAX = torch.matmul(blockVectorX.T.conj(), blockVectorAX)
+
+#     _lambda, eigBlockVector = torch.linalg.eigh(gramXAX)
+#     ii = _get_indx(_lambda, sizeX, mode=mode)
+#     _lambda = _lambda[ii]
+
+#     eigBlockVector = torch.Tensor(eigBlockVector[:, ii])
+#     blockVectorX = torch.matmul(blockVectorX, eigBlockVector)
+#     blockVectorAX = torch.matmul(blockVectorAX, eigBlockVector)
+
+#     # Active index set
+#     activeMask = torch.ones((sizeX,), dtype=bool)
+#     previousBlockSize = sizeX
+#     ident = torch.eye(sizeX, dtype=A.dtype)
+#     ident0 = torch.eye(sizeX, dtype=A.dtype)
+
+#     # Main iteration loop.
+#     blockVectorP = None  # set during iteration
+#     blockVectorAP = None
+#     blockVectorBP = None
+
+#     iterationNumber = -1
+#     restart = True
+#     explicitGramFlag = False
+
+
+#     # while iterationNumber < max_niter:
+#     iterationNumber += 1
+
+#     assert B is None
+#     aux = blockVectorX * _lambda[None, :]
+
+#     blockVectorR = blockVectorAX - aux
+
+#     aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
+#     residualNorms = torch.sqrt(aux)
+
+#     # ii = np.where(residualNorms > residualTolerance, True, False)
+#     ii = torch.where(residualNorms > residualTolerance, True, False)
+#     activeMask = activeMask & ii
+
+#     currentBlockSize = activeMask.sum()
+#     if currentBlockSize != previousBlockSize:
+#         previousBlockSize = currentBlockSize
+#         ident = torch.eye(currentBlockSize, dtype=A.dtype)
+
+#     if currentBlockSize == 0:
+#         break
+
+#     # activeBlockVectorR = blockVectorR[:, activeMask]
+#     activeBlockVectorR = _as2d(blockVectorR[:, activeMask])
+
+#     if iterationNumber > 0:
+#         activeBlockVectorP = _as2d(blockVectorP[:, activeMask])
+#         activeBlockVectorAP = _as2d(blockVectorAP[:, activeMask])
+#         # activeBlockVectorP = blockVectorP[:, activeMask]
+#         # activeBlockVectorAP = blockVectorAP[:, activeMask]
+#     #     if B is not None:
+#     #         activeBlockVectorBP = _as2d(blockVectorBP[:, activeMask])
+
+#     assert B is None
+#     activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
+#                                                             torch.matmul(blockVectorX.T.conj(), activeBlockVectorR))
+
+#     # B-orthonormalize the preconditioned residuals
+#     aux = _b_orthonormalize(B, activeBlockVectorR)
+#     activeBlockVectorR, activeBlockVectorBR = aux
+
+#     activeBlockVectorAR = A.mm(activeBlockVectorR)
+
+#     if iterationNumber > 0:
+#         assert B is None
+#         aux = _b_orthonormalize(B, activeBlockVectorP, retInvR=True)
+#         activeBlockVectorP, _, invR, normal = aux
+#         # Function _b_orthonormalize returns None if Cholesky fails
+#         if activeBlockVectorP is not None:
+#             activeBlockVectorAP = activeBlockVectorAP / _safedenom(normal, 1e-12)
+#             activeBlockVectorAP = torch.matmul(activeBlockVectorAP, invR)
+#             restart = False
+#         else:
+#             restart = True
+
+#     # Perform the Rayleigh Ritz Procedure:
+#     # Compute symmetric Gram matrices:
+#     if activeBlockVectorAR.dtype == torch.float64:
+#         myeps = 1
+#     elif activeBlockVectorR.dtype == torch.float32:
+#         myeps = 1e-4
+#     else:
+#         myeps = 1e-8
+
+#     if residualNorms.max() > myeps and not explicitGramFlag:
+#         explicitGramFlag = False
+#     else:
+#         # Once explicitGramFlag, forever explicitGramFlag.
+#         explicitGramFlag = True
+
+#     # Shared memory assingments to simplify the code
+#     if B is None:
+#         blockVectorBX = blockVectorX
+#         activeBlockVectorBR = activeBlockVectorR
+#         if not restart:
+#             activeBlockVectorBP = activeBlockVectorP
+
+#     # Common submatrices:
+#     gramXAR = torch.matmul(blockVectorX.T.conj(), activeBlockVectorAR)
+#     gramRAR = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorAR)
+
+#     if explicitGramFlag:
+#         gramRAR = (gramRAR + gramRAR.T.conj()) / 2
+#         gramXAX = torch.matmul(blockVectorX.T.conj(), blockVectorAX)
+#         gramXAX = (gramXAX + gramXAX.T.conj()) / 2
+#         gramXBX = torch.matmul(blockVectorX.T.conj(), blockVectorBX)
+#         gramRBR = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorBR)
+#         gramXBR = torch.matmul(blockVectorX.T.conj(), activeBlockVectorBR)
+#     else:
+#         gramXAX = torch.diag(_lambda)
+#         gramXBX = ident0
+#         gramRBR = ident
+#         gramXBR = torch.zeros((sizeX, currentBlockSize), dtype=A.dtype)
+
+#     if not restart:
+#         gramXAP = torch.matmul(blockVectorX.T.conj(), activeBlockVectorAP)
+#         gramRAP = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorAP)
+#         gramPAP = torch.matmul(activeBlockVectorP.T.conj(), activeBlockVectorAP)
+#         gramXBP = torch.matmul(blockVectorX.T.conj(), activeBlockVectorBP)
+#         gramRBP = torch.matmul(activeBlockVectorR.T.conj(), activeBlockVectorBP)
+#         if explicitGramFlag:
+#             gramPAP = (gramPAP + gramPAP.T.conj()) / 2
+#             gramPBP = torch.matmul(activeBlockVectorP.T.conj(), activeBlockVectorBP)
+#         else:
+#             gramPBP = ident
+#         gramA = torch.cat((torch.cat((gramXAX, gramXAR, gramXAP), dim=-1), torch.cat((gramXAR.T.conj(), gramRAR, gramRAP), dim=-1), torch.cat((gramXAP.T.conj(), gramRAP.T.conj(), gramPAP), dim=-1)), dim=-2)
+
+#         gramB = torch.cat((torch.cat((gramXBX, gramXBR, gramXBP), dim=-1), torch.cat((gramXBR.T.conj(), gramRBR, gramRBP), dim=-1), torch.cat((gramXBP.T.conj(), gramRBP.T.conj(), gramPBP), dim=-1)), dim=-2)
+
+#         # _lambda, eigBlockVector = _eigh(gramXAP, gramXAP)
+#         # _lambda, eigBlockVector = _eigh(gramA, gramB)
+#         # _lambda, eigBlockVector = what_is_this(gramA, gramB)
+#         # print('i')
+#         if gramB is None:
+#             _lambda, eigBlockVector = torch.linalg.eigh(gramA)
+#         else:
+#             R = _cholesky(gramB)
+#             RTi = torch.linalg.inv(R)
+#             Ri = torch.linalg.inv(R.T)
+#             F = torch.matmul(RTi, torch.matmul(gramA, Ri))
+#             _lambda, eigBlockVector = torch.linalg.eigh(F)
+#             eigeigBlockVectorVec = torch.matmul(Ri, eigBlockVector)
+#             eigeigBlockVectorVec = torch.matmul(Ri, eigBlockVector)
+#     else:
+#         gramA = torch.cat((torch.cat((gramXAX, gramXAR), dim=-1),
+#                             torch.cat((gramXAR.T.conj(), gramRAR), dim=-1)), dim=-2)
+
+#         gramB = torch.cat((torch.cat((gramXBX, gramXBR), dim=-1),
+#                             torch.cat((gramXBR.T.conj(), gramRBR), dim=-1)), dim=-2)
+#         try:
+#             if gramB is None:
+#                 _lambda, eigBlockVector = torch.linalg.eigh(gramA)
+#             else:
+#                 R = _cholesky(gramB)
+#                 RTi = torch.linalg.inv(R)
+#                 Ri = torch.linalg.inv(R.T)
+#                 F = torch.matmul(RTi, torch.matmul(gramA, Ri))
+#                 _lambda, eigBlockVector = torch.linalg.eigh(F)
+#                 eigeigBlockVectorVec = torch.matmul(Ri, eigBlockVector)
+#                 eigeigBlockVectorVec = torch.matmul(Ri, eigBlockVector)
+#         except:
+#             raise ValueError
+
