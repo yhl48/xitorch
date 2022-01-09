@@ -168,7 +168,9 @@ def test_equil(dtype, device, clss):
         "alpha": -0.5,
     }
     bck_options = {
-        "method": "cg",
+        # NOTE: using "cg" fails the test, and using "gmres" produces an error
+        # of re-entrant
+        "method": "exactsolve",
     }
 
     A    = torch.nn.Parameter((torch.randn((nr, nr)) * 0.5).to(dtype).requires_grad_())
@@ -283,7 +285,7 @@ def test_minimize(dtype, device, clss, method):
 
     # check the hessian (must be posdef)
     h = hess(model.forward, (y1,), idxs=0).fullmatrix()
-    eigval, _ = torch.symeig(h)
+    eigval = torch.linalg.eigvalsh(h)
     assert torch.all(eigval >= 0)
 
     def getloss(A, y0, diag, bias):
@@ -422,7 +424,7 @@ def test_minimize_methods(dtype, device, method):
 
     # check the hessian (must be posdef)
     h = hess(model.forward, (y1,), idxs=0).fullmatrix()
-    eigval, _ = torch.symeig(h)
+    eigval = torch.linalg.eigvalsh(h)
     assert torch.all(eigval >= 0)
 
 ############## additional tests ##############

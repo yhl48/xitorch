@@ -1,8 +1,9 @@
 import torch
+import copy
 from typing import Callable, Union, Mapping, Any, Sequence, Dict
 from xitorch._utils.assertfuncs import assert_fcn_params, assert_runtime
 from xitorch._core.pure_function import get_pure_function, make_sibling
-from xitorch._impls.integrate.ivp.explicit_rk import rk4_ivp, rk38_ivp
+from xitorch._impls.integrate.ivp.explicit_rk import rk4_ivp, rk38_ivp, fwd_euler_ivp
 from xitorch._impls.integrate.ivp.adaptive_rk import rk23_adaptive, rk45_adaptive
 from xitorch._utils.misc import set_default_option, TensorNonTensorSeparator, \
     TensorPacker, get_method
@@ -27,6 +28,11 @@ def solve_ivp(fcn: Union[Callable[..., torch.Tensor], Callable[..., Sequence[tor
     .. math::
 
         \mathbf{y}(t) = \mathbf{y_0} + \int_{t_0}^{t} \mathbf{f}(t', \mathbf{y}, \theta)\ \mathrm{d}t'
+
+    Although the original ``solve_ivp`` does not accept batched ``ts``, it can
+    be batched using functorch's ``vmap`` (only for explicit solver, though,
+    e.g. ``rk38``, ``rk4``, and ``euler``). Adaptive steps cannot be vmapped
+    at the moment.
 
     Arguments
     ---------
@@ -107,6 +113,7 @@ class _SolveIVP(torch.autograd.Function):
             "rk38": rk38_ivp,
             "rk23": rk23_adaptive,
             "rk45": rk45_adaptive,
+            "euler": fwd_euler_ivp,
         }
         solver = get_method("solve_ivp", methods, method)
         yt = solver(pfcn, ts, y0, params, **config)
@@ -203,6 +210,16 @@ class _SolveIVP(torch.autograd.Function):
         states[dLdp_slice] = [torch.zeros_like(tp) for tp in tensor_params]
         grad_ts = [None for _ in range(len(ts))] if ts_requires_grad else None
 
+        # define a new function for the augmented dynamics
+        bkw_roller = TensorPacker(states)
+
+        @make_sibling(new_pfunc)
+        def pfcn_back(t, ytensor, *params):
+            ylist = bkw_roller.pack(ytensor)
+            res_list = new_pfunc(t, ylist, *params)
+            res = bkw_roller.flatten(res_list)
+            return res
+
         for i in range(len(ts_flip) - 1):
             if ts_requires_grad:
                 feval = pfunc2(ts_flip[i], states[y_index], tensor_params)[0]
@@ -211,8 +228,14 @@ class _SolveIVP(torch.autograd.Function):
                 grad_ts[t_flip_idx] = dLdt1.reshape(-1)
 
             t_flip_idx -= 1
-            outs = solve_ivp(new_pfunc, ts_flip[i:i + 2], states, tensor_params,
-                             bck_options=ctx.bck_config, **ctx.bck_config)
+            states_flatten = bkw_roller.flatten(states)
+            fwd_config = copy.copy(ctx.bck_config)
+            bck_config = copy.copy(ctx.bck_config)
+            outs_flatten = _SolveIVP.apply(
+                pfcn_back, ts_flip[i:i + 2], fwd_config, bck_config, len(tensor_params),
+                states_flatten, *tensor_params)
+            outs = bkw_roller.pack(outs_flatten)
+
             # only take the output for the earliest time
             states = [out[-1] for out in outs]
             states[y_index] = yt[t_flip_idx]
@@ -237,5 +260,7 @@ ivp_methods: Dict[str, Callable] = {
     "rk45": rk45_adaptive,
     "rk23": rk23_adaptive,
     "rk4": rk4_ivp,
+    "rk38": rk38_ivp,
+    "euler": fwd_euler_ivp,
 }
 solve_ivp.__doc__ = get_methods_docstr(solve_ivp, ivp_methods)
