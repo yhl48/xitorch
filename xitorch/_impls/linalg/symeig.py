@@ -231,21 +231,22 @@ def davidson(A: LinearOperator, neig: int,
     eigvecs = best_eigvecs  # (*BAM, na, neig)
     return eigvals, eigvecs
 
-def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
+def lobpcg(A: LinearOperator,
            neig: int,
            mode: str,
            M: Optional[LinearOperator] = None,
            max_niter: int = 1000,
            nguess: Optional[int] = None,
            v_init: str = "randn",
-           # max_addition: Optional[int] = None,
-           # min_eps: float = 1e-6,
-           # verbose: bool = False,
+           max_addition: Optional[int] = None,
+           min_eps: float = 1e-6,
+           verbose: bool = False,
+           B: Optional[LinearOperator] = None,
            **unused) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Locally Optimal Block Preconditioned Conjugate Gradient (LOBPCG)
     method to find largest or smallest eigenvalues and the corresponding
-    eigenvectors of a symmetric generalized eigenvalue problem [3]_.
+    eigenvectors of a symmetric generalized eigenvalue problem Ax=\u03BBBx [3]_.
 
     Arguments
     ---------
@@ -253,13 +254,14 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         Maximum number of iterations
     v_init: str
         Mode of the initial guess (``"randn"``, ``"rand"``, ``"eye"``)
+    B: Linear Operator or None
+        The right hand side operator in a generalized eigenproblem.
+        Should be positive-definite and either complex Hermitian or real symmetric.
 
     References
     ----------
     .. [3] https://en.wikipedia.org/wiki/LOBPCG
     """
-    B = None
-
     if nguess is None:
         nguess = neig
 
@@ -309,6 +311,8 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
     eigBlockVector = torch.Tensor(eigBlockVector[:, ii])
     blockVectorX = torch.matmul(blockVectorX, eigBlockVector)
     blockVectorAX = torch.matmul(blockVectorAX, eigBlockVector)
+    if B is not None:
+        blockVectorBX = torch.matmul(blockVectorBX, eigBlockVector)
 
     # Active index set
     activeMask = torch.ones((sizeX,), dtype=bool)
@@ -330,8 +334,11 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         # print(iterationNumber)
         iterationNumber += 1
 
-        assert B is None
-        aux = blockVectorX * _lambda[None, :]
+        # assert B is None
+        if B is None:
+            aux = blockVectorX * _lambda[None, :]
+        else:
+            aux = blockVectorBX * _lambda[None, :]
 
         blockVectorR = blockVectorAX - aux
 
@@ -354,11 +361,19 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         if iterationNumber > 0:
             activeBlockVectorP = _as2d(blockVectorP[:, activeMask])
             activeBlockVectorAP = _as2d(blockVectorAP[:, activeMask])
-            assert B is None
+            if B is not None:
+                activeBlockVectorBP = _as2d(blockVectorBP[:, activeMask])
+            # assert B is None
 
-        assert B is None
-        activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
-                                                               torch.matmul(blockVectorX.T.conj(), activeBlockVectorR))
+        # assert B is None
+        if B is None:
+            activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
+                                                                   torch.matmul(blockVectorX.T.conj(),
+                                                                                activeBlockVectorR))
+        else:
+            activeBlockVectorR = activeBlockVectorR - torch.matmul(blockVectorX,
+                                                                   torch.matmul(blockVectorBX.T.conj(),
+                                                                                activeBlockVectorR))
 
         # B-orthonormalize the preconditioned residuals
         aux = _b_orthonormalize(B, activeBlockVectorR)
@@ -367,9 +382,14 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         activeBlockVectorAR = A.mm(activeBlockVectorR)
 
         if iterationNumber > 0:
-            assert B is None
-            aux = _b_orthonormalize(B, activeBlockVectorP, retInvR=True)
-            activeBlockVectorP, _, invR, normal = aux
+            # assert B is None
+            if B is None:
+                aux = _b_orthonormalize(B, activeBlockVectorP, retInvR=True)
+                activeBlockVectorP, _, invR, normal = aux
+            else:
+                aux = _b_orthonormalize(B, activeBlockVectorP, activeBlockVectorBP, retInvR=True)
+                activeBlockVectorP, activeBlockVectorBP, invR, normal = aux
+
             # Function _b_orthonormalize returns None if Cholesky fails
             if activeBlockVectorP is not None:
                 activeBlockVectorAP = activeBlockVectorAP / _safedenom(normal, 1e-12)
@@ -394,7 +414,7 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
             explicitGramFlag = True
 
         # Shared memory assingments to simplify the code
-        assert B is None
+        # assert B is None
         if B is None:
             blockVectorBX = blockVectorX
             activeBlockVectorBR = activeBlockVectorR
@@ -460,28 +480,57 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
         eigBlockVector = eigBlockVector[:, ii]
 
         # Compute Ritz vectors
-        assert B is None
-        if not restart:
-            eigBlockVectorX = eigBlockVector[:sizeX]
-            eigBlockVectorR = eigBlockVector[sizeX:sizeX + currentBlockSize]
-            eigBlockVectorP = eigBlockVector[sizeX + currentBlockSize:]
+        # assert B is None
+        if B is None:
+            if not restart:
+                eigBlockVectorX = eigBlockVector[:sizeX]
+                eigBlockVectorR = eigBlockVector[sizeX:sizeX + currentBlockSize]
+                eigBlockVectorP = eigBlockVector[sizeX + currentBlockSize:]
 
-            pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
-            pp += torch.matmul(activeBlockVectorP, eigBlockVectorP)
+                pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+                pp += torch.matmul(activeBlockVectorP, eigBlockVectorP)
 
-            app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
-            app += torch.matmul(activeBlockVectorAP, eigBlockVectorP)
+                app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+                app += torch.matmul(activeBlockVectorAP, eigBlockVectorP)
+            else:
+                eigBlockVectorX = eigBlockVector[:sizeX]
+                eigBlockVectorR = eigBlockVector[sizeX:]
+
+                pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+                app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+
+            blockVectorX = torch.matmul(blockVectorX, eigBlockVectorX) + pp
+            blockVectorAX = torch.matmul(blockVectorAX, eigBlockVectorX) + app
+
+            blockVectorP, blockVectorAP = pp, app
+
         else:
-            eigBlockVectorX = eigBlockVector[:sizeX]
-            eigBlockVectorR = eigBlockVector[sizeX:]
+            if not restart:
+                eigBlockVectorX = eigBlockVector[:sizeX]
+                eigBlockVectorR = eigBlockVector[sizeX:sizeX + currentBlockSize]
+                eigBlockVectorP = eigBlockVector[sizeX + currentBlockSize:]
 
-            pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
-            app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+                pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+                pp += torch.matmul(activeBlockVectorP, eigBlockVectorP)
 
-        blockVectorX = torch.matmul(blockVectorX, eigBlockVectorX) + pp
-        blockVectorAX = torch.matmul(blockVectorAX, eigBlockVectorX) + app
+                app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+                app += torch.matmul(activeBlockVectorAP, eigBlockVectorP)
 
-        blockVectorP, blockVectorAP = pp, app
+                bpp = torch.matmul(activeBlockVectorBR, eigBlockVectorR)
+                bpp += torch.matmul(activeBlockVectorBP, eigBlockVectorP)
+            else:
+                eigBlockVectorX = eigBlockVector[:sizeX]
+                eigBlockVectorR = eigBlockVector[sizeX:]
+
+                pp = torch.matmul(activeBlockVectorR, eigBlockVectorR)
+                app = torch.matmul(activeBlockVectorAR, eigBlockVectorR)
+                bpp = torch.matmul(activeBlockVectorBR, eigBlockVectorR)
+
+            blockVectorX = torch.matmul(blockVectorX, eigBlockVectorX) + pp
+            blockVectorAX = torch.matmul(blockVectorAX, eigBlockVectorX) + app
+            blockVectorBX = torch.matmul(blockVectorBX, eigBlockVectorX) + bpp
+
+            blockVectorP, blockVectorAP, blockVectorBP = pp, app, bpp
 
     return _lambda, blockVectorX
 
@@ -515,6 +564,8 @@ def _b_orthonormalize(B: Optional[LinearOperator],
     if blockVectorBV is None:
         if B is None:
             blockVectorBV = blockVectorV  # Shared data!!!
+        else:
+            blockVectorBV = B.mm(blockVectorV)
     else:
         blockVectorBV = blockVectorBV / _safedenom(normalization, 1e-12)
     VBV = torch.matmul(blockVectorV.T.conj(), blockVectorBV)
