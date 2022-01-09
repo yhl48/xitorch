@@ -238,11 +238,26 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
            max_niter: int = 1000,
            nguess: Optional[int] = None,
            v_init: str = "randn",
-           max_addition: Optional[int] = None,
-           min_eps: float = 1e-6,
-           verbose: bool = False,
+           # max_addition: Optional[int] = None,
+           # min_eps: float = 1e-6,
+           # verbose: bool = False,
            **unused) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Locally Optimal Block Preconditioned Conjugate Gradient (LOBPCG)
+    method to find largest or smallest eigenvalues and the corresponding
+    eigenvectors of a symmetric generalized eigenvalue problem [3]_.
 
+    Arguments
+    ---------
+    max_niter: int
+        Maximum number of iterations
+    v_init: str
+        Mode of the initial guess (``"randn"``, ``"rand"``, ``"eye"``)
+
+    References
+    ----------
+    .. [3] https://en.wikipedia.org/wiki/LOBPCG
+    """
     B = None
 
     if nguess is None:
@@ -273,7 +288,10 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
     else:
         sizeY = 0
 
-    n, sizeX = blockVectorX.shape
+    if len(blockVectorX.shape) == 2:
+        n, sizeX = blockVectorX.shape
+    else:
+        raise NotImplementedError("Currently only support A of a single batch size")
 
     residualTolerance = torch.sqrt(torch.Tensor([1e-15])) * n
 
@@ -422,7 +440,7 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
 
             try:
                 _lambda, eigBlockVector = _eigh(gramA, gramB)
-            except:
+            except Exception as e:
                 # try again after dropping the direction vectors P from RR
                 restart = True
 
@@ -434,7 +452,7 @@ def lobpcg(A: LinearOperator,  # B: Optional[LinearOperator],
                                torch.cat((gramXBR.T.conj(), gramRBR), dim=-1)), dim=-2)
             try:
                 _lambda, eigBlockVector = _eigh(gramA, gramB)
-            except:
+            except Exception as e:
                 raise ValueError('eigh has failed in lobpcg iterations')
 
         ii = _get_indx(_lambda, sizeX, mode=mode)
