@@ -236,9 +236,7 @@ def lobpcg(A: LinearOperator,
            mode: str,
            M: Optional[LinearOperator] = None,
            max_niter: int = 1000,
-           nguess: Optional[int] = None,
            v_init: str = "randn",
-           max_addition: Optional[int] = None,
            min_eps: float = 1e-6,
            verbose: bool = False,
            B: Optional[LinearOperator] = None,
@@ -255,15 +253,17 @@ def lobpcg(A: LinearOperator,
     v_init: str
         Mode of the initial guess (``"randn"``, ``"rand"``, ``"eye"``)
     B: Linear Operator or None
-        The right hand side operator in a generalized eigenproblem.
-        Should be positive-definite and either complex Hermitian or real symmetric.
+       The right hand side operator in a generalized eigenproblem.
+       Should be positive-definite and either complex Hermitian or real symmetric.
+    min_eps: float
+       Stopping criterion.
+    verbose: bool
+       Not implemented for lobpcg for now. Once implemented, could be set to true to be verbose.
 
     References
     ----------
     .. [3] https://en.wikipedia.org/wiki/LOBPCG
     """
-    if nguess is None:
-        nguess = neig
 
     # get the shape of the transformation
     na = A.shape[-1]
@@ -276,8 +276,8 @@ def lobpcg(A: LinearOperator,
 
     # set up the initial guess
     X = _set_initial_v(v_init.lower(), dtype, device,
-                       bcast_dims, na, nguess,
-                       M=M)  # (*BAM, na, nguess)
+                       bcast_dims, na, neig,
+                       M=M)  # (*BAM, na, neig)
 
     blockVectorX = X
     blockVectorY = None
@@ -295,7 +295,8 @@ def lobpcg(A: LinearOperator,
     else:
         raise NotImplementedError("Currently only support A of a single batch size")
 
-    residualTolerance = torch.sqrt(torch.Tensor([1e-15])) * n
+    if min_eps is None or min_eps < 0:
+        min_eps = torch.sqrt(torch.Tensor([1e-15])) * n
 
     # B-orthonormalize X
     blockVectorX, blockVectorBX = _b_orthonormalize(B, blockVectorX)
@@ -345,7 +346,7 @@ def lobpcg(A: LinearOperator,
         aux = torch.sum(blockVectorR.conj() * blockVectorR, dim=0)
         residualNorms = torch.sqrt(aux)
 
-        ii = torch.where(residualNorms > residualTolerance, True, False)
+        ii = torch.where(residualNorms > min_eps, True, False)
         activeMask = activeMask & ii
 
         currentBlockSize = activeMask.sum()
